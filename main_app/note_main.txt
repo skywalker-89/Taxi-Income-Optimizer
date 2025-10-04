@@ -1,0 +1,27 @@
+help me work this out/ design the user interface for me 
+this is the current user interface I had bro 
+how could I put the recommendation system here inside of the app.py there bro 
+how could I do that bro 
+if you got any questions please ask me before proceeding
+User Input Method: How do you want drivers to input their route parameters? 
+* Click on map for start/end points?
+* Manual lat/lng entry?
+* Address search/autocomplete?
+* all of them
+Time Selection: Should drivers be able to: 
+* Set custom start/end times
+Results Display: How should we show the 3 recommended routes? 
+* Side panel with route cards?
+* Modal/popup overlay?
+* Expandable accordion?
+* Show all routes on map simultaneously with different colors?
+* I dont know bro what will be the best 
+Model Files Location: The optimizer expects models in a specific directory. Where are your trained models actually stored relative to app.py? it is in the same directory bro inside of the main app folder 
+these are the file path 
+/Users/jul/Desktop/uni/Data Analytics/Taxi-Income-Optimizer/main_app/app.py
+/Users/jul/Desktop/uni/Data Analytics/Taxi-Income-Optimizer/main_app/recommendation_system.py
+/Users/jul/Desktop/uni/Data Analytics/Taxi-Income-Optimizer/main_app/models
+Real-time Updates: Do you want: 
+* Live simulation progress bar
+* Ability to cancel running simulations
+Mobile Experience: Should this work well on mobile devices (responsive design)? No
