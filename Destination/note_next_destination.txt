@@ -1,0 +1,348 @@
+Destination Prediction Model: Complete Breakdown
+Goal
+Predict where a passenger will want to go given:
+predict the destination H3 zone given the origin zone.
+
+Origin zone (H3 cell where pickup happens)
+Time features (hour, day of week, weekend/weekday)
+Context (rush hour, time period)
+H3 zone resolution of 7
+This is essentially a multi-class classification problem where each destination H3 zone is a class.
+
+Train with XGBoost
+
+
+What Happens if Destination is Within Origin Zone?
+This is actually a real and common scenario in taxi operations:
+Real-World Examples:
+
+Short trips within the same H3 zone (res 7):
+
+H3 resolution 7 cells are approximately 5.16 km² or ~2.27 km across
+A passenger might take a taxi from one end of the zone to the other (e.g., from one building to another in the same district)
+Examples: Hospital to home within same neighborhood, restaurant to hotel in same area
+
+
+What should we do?
+
+Option A: Keep them as valid predictions (I recommend this)
+
+They represent real taxi behavior
+The model learns that some zones have high internal demand
+These trips still generate revenue
+In your recommendation system, it means "stay in this zone, high chance of getting another passenger here"
+
+
+
+================================================================================
+XGBOOST DESTINATION PREDICTION MODEL TRAINING
+================================================================================
+
+[1/8] Loading data...
+✓ Loaded 336028 samples
+✓ Original number of destination classes: 330
+
+[2/8] Handling class imbalance with Top-N strategy...
+
+Destination distribution:
+  Total unique destinations: 330
+  Most common destination: 8334 trips
+  Least common destination: 100 trips
+
+✓ Kept top 100 destinations
+✓ Moved 87765 trips (26.1%) to 'OTHER' category
+✓ Final number of classes: 101
+
+[3/8] Creating time-based splits...
+
+Time-based split:
+  Train: 235219 samples (70.0%)
+  Validation: 50404 samples (15.0%)
+  Test: 50405 samples (15.0%)
+
+[4/8] Encoding categorical features...
+✓ Encoded 'origin_h3': 917 unique values
+✓ Encoded 'time_period': 4 unique values
+✓ Encoded target: 101 classes
+
+[5/8] Preparing XGBoost datasets...
+✓ XGBoost DMatrix objects created
+
+[6/8] Training model with your best hyperparameters...
+Training model...
+[0]	train-mlogloss:2.91027	val-mlogloss:2.97731
+[50]	train-mlogloss:1.34634	val-mlogloss:1.50946
+[100]	train-mlogloss:1.14250	val-mlogloss:1.33586
+[150]	train-mlogloss:1.03928	val-mlogloss:1.26092
+[200]	train-mlogloss:0.98105	val-mlogloss:1.22628
+[250]	train-mlogloss:0.94220	val-mlogloss:1.20514
+[299]	train-mlogloss:0.91505	val-mlogloss:1.19205
+✓ Model trained!
+
+[7/8] Evaluating model...
+
+================================================================================
+ACCURACY METRICS
+================================================================================
+Train Accuracy:      0.7558
+Validation Accuracy: 0.6797
+Test Accuracy:       0.6367
+
+================================================================================
+TOP-K ACCURACY
+================================================================================
+
+Top-1 Accuracy:
+  Train:      0.7558
+  Validation: 0.6797
+  Test:       0.6367
+
+Top-3 Accuracy:
+  Train:      0.8996
+  Validation: 0.8237
+  Test:       0.7999
+
+Top-5 Accuracy:
+  Train:      0.9352
+  Validation: 0.8700
+  Test:       0.8592
+
+Top-10 Accuracy:
+  Train:      0.9673
+  Validation: 0.9189
+  Test:       0.9178
+
+================================================================================
+F1 SCORES
+================================================================================
+Test F1 (Macro):    0.5606
+Test F1 (Weighted): 0.6295
+
+================================================================================
+CLASSIFICATION REPORT (Test Set - Top 20 Classes)
+================================================================================
+                 precision    recall  f1-score   support
+
+          OTHER      0.866     0.808     0.836     12955
+8764a4badffffff      0.780     0.802     0.791      1367
+8764a4b16ffffff      0.932     0.845     0.886      1165
+8764a4b14ffffff      0.872     0.779     0.823      1132
+8764a4ba2ffffff      0.860     0.701     0.772       973
+8764a4ba0ffffff      0.855     0.718     0.780       942
+8764a4b1effffff      0.763     0.609     0.677       915
+8764a4849ffffff      0.893     0.785     0.836       867
+8764a4b15ffffff      0.757     0.659     0.705       836
+8764a4b13ffffff      0.883     0.665     0.759       820
+8764a4b10ffffff      0.828     0.625     0.713       753
+8764a485cffffff      0.927     0.695     0.795       752
+8764a4ba3ffffff      0.829     0.666     0.739       749
+8764a4ba4ffffff      0.840     0.732     0.782       734
+8764a495affffff      0.744     0.647     0.692       696
+8764a4b12ffffff      0.864     0.698     0.773       676
+8764a4b11ffffff      0.777     0.617     0.687       626
+8764a4b02ffffff      0.766     0.676     0.718       624
+8764a4bb1ffffff      0.806     0.625     0.704       584
+8764a484bffffff      0.856     0.693     0.766       566
+
+      micro avg      0.850     0.753     0.799     28732
+      macro avg      0.835     0.702     0.762     28732
+   weighted avg      0.850     0.753     0.797     28732
+
+
+[8/8] Analyzing feature importance...
+
+Top 20 Most Important Features:
+================================================================================
+distance_from_center_km.................      45.82
+origin_h3...............................      38.67
+od_pair_historical_count................      25.86
+origin_center_lon.......................      23.87
+origin_center_lat.......................      21.42
+origin_to_dest_popularity...............      19.05
+od_timeperiod_historical_count..........       9.37
+zone_avg_distance.......................       7.84
+od_rush_historical_count................       7.12
+zone_historical_trips...................       6.21
+zone_avg_duration.......................       4.54
+pickup_day..............................       4.03
+time_period.............................       3.97
+day_of_month_cos........................       3.88
+hour_cos................................       3.67
+pickup_hour.............................       3.58
+hour_sin................................       2.94
+day_of_month_sin........................       2.34
+pickup_is_weekend.......................       2.31
+pickup_day_of_week......................       2.17
+
+✓ Feature importance plot saved: feature_importance.png
+
+Generating confusion matrix for top destinations...
+✓ Confusion matrix saved: confusion_matrix_top10.png
+
+Saving model and encoders...
+✓ Model saved: xgboost_destination_model_20251002_150024.json
+✓ Encoders and metadata saved: model_encoders_20251002_150024.pkl
+✓ Feature importance saved: feature_importance_20251002_150024.csv
+
+================================================================================
+TRAINING COMPLETE! 🎉
+================================================================================
+
+Model Performance Summary:
+  Test Accuracy:        0.6367
+  Test Top-3 Accuracy:  0.7999
+  Test Top-5 Accuracy:  0.8592
+  Test F1 (Weighted):   0.6295
+
+Files Generated:
+  1. xgboost_destination_model_20251002_150024.json
+  2. model_encoders_20251002_150024.pkl
+  3. feature_importance.png
+  4. confusion_matrix_top10.png
+  5. feature_importance_20251002_150024.csv
+
+================================================================================
+Next steps:
+  1. Review feature importance to understand key factors
+  2. Check confusion matrix to see common misclassifications
+  3. Use the model for predictions
+================================================================================
+
+
+================================================================================
+BLIND TEST - DECEMBER 2024 DATA
+Testing model on completely unseen data from a different month
+================================================================================
+
+[1/7] Loading trained model and encoders...
+Loading model: xgboost_destination_model_20251002_150024.json
+Loading encoders: model_encoders_20251002_150024.pkl
+✓ Model loaded successfully
+✓ Number of destination classes: 101
+
+[2/7] Selecting 10 random files from December 2024...
+Total files available in December: 31
+
+Randomly selected 10 files:
+  1. 20241202.csv.out
+  2. 20241205.csv.out
+  3. 20241222.csv.out
+  4. 20241219.csv.out
+  5. 20241207.csv.out
+  6. 20241217.csv.out
+  7. 20241210.csv.out
+  8. 20241215.csv.out
+  9. 20241208.csv.out
+  10. 20241212.csv.out
+
+[3/7] Processing December data with same pipeline...
+Loading files...
+✓ Loaded 19111218 total records
+Cleaning data...
+✓ After filtering: 5025377 records
+✓ Unique vehicles: 1928
+Calculating trip distances...
+✓ After distance filtering: 3835421 records
+
+[4/7] Extracting complete trips...
+✓ Extracted 118193 complete trips
+
+[5/7] Creating H3 zones and engineering features...
+✓ Unique origin zones: 947
+✓ Unique destination zones: 775
+Engineering date and time features...
+Engineering geographic features...
+Engineering historical demand features...
+✓ Feature engineering complete
+
+[6/7] Preparing test data and making predictions...
+✓ Test trips with known destination classes: 118193
+✓ Predictions complete
+
+[7/7] Evaluating model performance on blind test...
+
+================================================================================
+BLIND TEST RESULTS - DECEMBER 2024
+================================================================================
+
+Top-1 Accuracy: 0.5519 (55.19%)
+Top-3 Accuracy:  0.7503 (75.03%)
+Top-5 Accuracy:  0.8232 (82.32%)
+Top-10 Accuracy:  0.8977 (89.77%)
+
+F1 Score (Macro):    0.4085
+F1 Score (Weighted): 0.5222
+
+================================================================================
+CLASSIFICATION REPORT (Top 20 Most Common Destinations)
+================================================================================
+                 precision    recall  f1-score   support
+
+          OTHER      0.858     0.911     0.884     32756
+8764a4badffffff      0.956     0.631     0.760      2935
+8764a4b16ffffff      0.831     0.580     0.683      2866
+8764a4b14ffffff      0.718     0.716     0.717      2657
+8764a4b13ffffff      0.471     0.646     0.545      2226
+8764a4ba2ffffff      0.666     0.654     0.660      2179
+8764a4849ffffff      0.770     0.700     0.733      2130
+8764a4ba0ffffff      0.774     0.469     0.584      2114
+8764a4b10ffffff      0.447     0.165     0.241      2077
+8764a485cffffff      0.933     0.502     0.652      1940
+8764a4ba3ffffff      0.644     0.549     0.592      1894
+8764a4b1effffff      0.620     0.444     0.518      1893
+8764a4b15ffffff      0.804     0.588     0.679      1797
+8764a4ba4ffffff      0.824     0.615     0.704      1740
+8764a4b11ffffff      0.276     0.056     0.094      1506
+8764a484bffffff      0.851     0.641     0.731      1416
+8764a4bb1ffffff      0.715     0.461     0.561      1297
+8764a4b12ffffff      0.404     0.442     0.422      1278
+8764a4b02ffffff      0.650     0.609     0.629      1269
+8764a495affffff      0.511     0.391     0.443      1244
+
+      micro avg      0.784     0.713     0.747     69214
+      macro avg      0.686     0.539     0.592     69214
+   weighted avg      0.773     0.713     0.731     69214
+
+
+Generating confusion matrix...
+✓ Confusion matrix saved: blind_test_confusion_matrix.png
+
+================================================================================
+DATA DISTRIBUTION COMPARISON
+================================================================================
+
+Time Period Distribution:
+time_period
+morning      32703
+afternoon    32626
+night        27625
+evening      25239
+Name: count, dtype: int64
+
+Weekend trips: 49704 (42.1%)
+Rush hour trips: 41485 (35.1%)
+
+Average trip statistics:
+  Distance: 18.96 km
+  Duration: 27.57 minutes
+  Fare: 164.41 THB
+
+================================================================================
+SAVING RESULTS
+================================================================================
+✓ Results summary saved: blind_test_results_summary.csv
+✓ Detailed results saved: blind_test_detailed_results.csv
+
+================================================================================
+BLIND TEST COMPLETE! ✅
+================================================================================
+
+Model tested on 118193 trips from December 2024
+Top-1 Accuracy: 55.19%
+Top-3 Accuracy: 75.03%
+
+Files generated:
+  1. blind_test_results_summary.csv
+  2. blind_test_detailed_results.csv
+  3. blind_test_confusion_matrix.png
+================================================================================

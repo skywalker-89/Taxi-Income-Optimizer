@@ -1,7 +1,9 @@
 from pathlib import Path
 from datetime import datetime
-from typing import Any, List, Tuple
+from typing import Dict, Any, List, Tuple
+import json
 import numpy as np
+import pandas as pd
 from flask import Flask, jsonify, render_template, request
 import requests
 from collections import defaultdict
@@ -17,6 +19,16 @@ except Exception as e:
 from recommendation_system import BangkokTaxiOptimizer
 
 APP_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = APP_ROOT.parent
+
+# Data locations
+PREPARED_DIR = PROJECT_ROOT / "PickUP rate" / "prepared_data" / "models"
+SEASONAL_PARQUET = PREPARED_DIR / "seasonal_baseline.parquet"
+SEASONAL_CSV = PREPARED_DIR / "seasonal_baseline.csv"
+THRESHOLDS_PATH = PREPARED_DIR / "color_thresholds.json"
+BOOSTER_JSON = PREPARED_DIR / "xgb_pickup_5min.json"
+FEATURE_NAMES_JSON = PREPARED_DIR / "feature_names.json"
+CALIBRATOR_JOBLIB = PREPARED_DIR / "isotonic_calibrator.joblib"
 
 # Model directory for optimizer (same directory as app.py)
 MODELS_DIR = APP_ROOT / "models"
@@ -24,9 +36,74 @@ MODELS_DIR = APP_ROOT / "models"
 # Map defaults
 BANGKOK_CENTER = [13.7563, 100.5018]
 DEFAULT_ZOOM = 12
+TARGET_H3_RES = 7
 
 # OSRM API endpoint
 OSRM_API = "http://router.project-osrm.org/route/v1/driving/"
+
+
+def _load_thresholds() -> Dict[str, float]:
+    if THRESHOLDS_PATH.exists():
+        return json.loads(THRESHOLDS_PATH.read_text())
+    return {"green": 0.7, "yellow": 0.5, "red": 0.3}
+
+
+def _cell_to_polygon(cell: str) -> List[List[float]]:
+    """Returns a closed polygon as list of [lon, lat] for the given H3 cell."""
+    boundary = []
+    try:
+        if hasattr(h3, "h3_to_geo_boundary"):
+            boundary = h3.h3_to_geo_boundary(cell, geo_json=True)
+        elif hasattr(h3, "cell_to_boundary"):
+            try:
+                boundary = h3.cell_to_boundary(cell, geo_json=True)
+            except TypeError:
+                boundary = h3.cell_to_boundary(cell)
+    except Exception:
+        boundary = []
+
+    poly: List[List[float]] = []
+    for pt in boundary or []:
+        if isinstance(pt, dict):
+            lat, lng = pt.get("lat"), pt.get("lng")
+        elif hasattr(pt, "lat") and hasattr(pt, "lng"):
+            lat, lng = getattr(pt, "lat"), getattr(pt, "lng")
+        else:
+            lat, lng = pt[0], pt[1]
+        poly.append([float(lng), float(lat)])
+    if poly and poly[0] != poly[-1]:
+        poly.append(poly[0])
+    return poly
+
+
+def _get_resolution(cell: str) -> int:
+    if hasattr(h3, "h3_get_resolution"):
+        return int(h3.h3_get_resolution(cell))
+    if hasattr(h3, "get_resolution"):
+        return int(h3.get_resolution(cell))
+    return -1
+
+
+def _children(cell: str, res: int) -> List[str]:
+    if hasattr(h3, "h3_to_children"):
+        return list(h3.h3_to_children(cell, res))
+    if hasattr(h3, "cell_to_children"):
+        return list(h3.cell_to_children(cell, res))
+    return [cell]
+
+
+def _prob_to_color(prob: float, th: Dict[str, float]) -> str:
+    if prob >= th["green"]:
+        return "green"
+    if prob >= th["yellow"]:
+        return "yellow"
+    if prob >= th["red"]:
+        return "red"
+    return "transparent"
+
+
+def _minute_of_day(dt: datetime) -> int:
+    return dt.hour * 60 + dt.minute
 
 
 def get_osrm_route(
@@ -79,7 +156,54 @@ def calculate_offset_position(
 app = Flask(__name__)
 
 # Lazy-load globals
+_seasonal_df: pd.DataFrame | None = None
+_thresholds: Dict[str, float] | None = None
+_feature_names: List[str] | None = None
+_booster = None
+_calibrator = None
 _optimizer: BangkokTaxiOptimizer | None = None
+
+
+def _ensure_loaded() -> None:
+    global _seasonal_df, _thresholds, _feature_names, _booster, _calibrator
+    if _thresholds is None:
+        _thresholds = _load_thresholds()
+    if _seasonal_df is None:
+        if SEASONAL_PARQUET.exists():
+            _seasonal_df = pd.read_parquet(SEASONAL_PARQUET)
+        elif SEASONAL_CSV.exists():
+            _seasonal_df = pd.read_csv(SEASONAL_CSV)
+        else:
+            raise FileNotFoundError(
+                f"Missing seasonal baseline at {SEASONAL_PARQUET} or {SEASONAL_CSV}"
+            )
+    if _feature_names is None:
+        if not FEATURE_NAMES_JSON.exists():
+            raise FileNotFoundError(
+                f"Missing feature_names.json at {FEATURE_NAMES_JSON}"
+            )
+        _feature_names = json.loads(FEATURE_NAMES_JSON.read_text())
+    if _booster is None:
+        try:
+            import xgboost as xgb
+        except Exception as e:
+            raise ImportError(
+                "xgboost is required. Install with: pip install xgboost"
+            ) from e
+        _booster = xgb.Booster()
+        if not BOOSTER_JSON.exists():
+            raise FileNotFoundError(f"Missing booster JSON at {BOOSTER_JSON}")
+        _booster.load_model(str(BOOSTER_JSON))
+    if _calibrator is None:
+        try:
+            import joblib
+        except Exception as e:
+            raise ImportError(
+                "joblib is required. Install with: pip install joblib"
+            ) from e
+        if not CALIBRATOR_JOBLIB.exists():
+            raise FileNotFoundError(f"Missing calibrator at {CALIBRATOR_JOBLIB}")
+        _calibrator = joblib.load(CALIBRATOR_JOBLIB)
 
 
 def _ensure_optimizer() -> BangkokTaxiOptimizer:
@@ -91,12 +215,197 @@ def _ensure_optimizer() -> BangkokTaxiOptimizer:
     return _optimizer
 
 
+def _build_feature_frame_for_dt(dt: datetime, cells: List[str]) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "h3_cell": cells,
+            "time_bin": pd.to_datetime(dt.replace(second=0, microsecond=0)),
+        }
+    )
+    fn: List[str] = _feature_names or []
+    for col in fn:
+        frame[col] = 0.0
+    hour = dt.hour
+    dow = dt.weekday()
+    minute = dt.minute
+    is_weekend = 1 if dow >= 5 else 0
+    time_setters = {
+        "hour": float(hour),
+        "dow": float(dow),
+        "is_weekend": float(is_weekend),
+        "sin_hour": float(np.sin(2 * np.pi * hour / 24.0)),
+        "cos_hour": float(np.cos(2 * np.pi * hour / 24.0)),
+        "sin_min": float(np.sin(2 * np.pi * minute / 60.0)),
+        "cos_min": float(np.cos(2 * np.pi * minute / 60.0)),
+    }
+    for k, v in time_setters.items():
+        if k in frame.columns:
+            frame[k] = v
+    return frame
+
+
+def _predict_probs_for_dt(dt: datetime) -> pd.DataFrame:
+    sdf = _seasonal_df
+    cells = sdf["h3_cell"].dropna().unique().tolist()
+    if not cells:
+        return pd.DataFrame(columns=["h3_cell", "prob"])
+    feats = _build_feature_frame_for_dt(dt, cells)
+    try:
+        import xgboost as xgb
+    except Exception as e:
+        raise ImportError(
+            "xgboost is required. Install with: pip install xgboost"
+        ) from e
+    dtest = xgb.DMatrix(feats[_feature_names], feature_names=_feature_names)
+    preds_raw = _booster.predict(dtest)
+    probs = _calibrator.predict(preds_raw)
+    out = pd.DataFrame(
+        {
+            "h3_cell": feats["h3_cell"].values,
+            "prob": probs.astype(float),
+        }
+    )
+    return out
+
+
 @app.route("/")
 def index() -> Any:
+    _ensure_loaded()
     return render_template(
         "index.html",
         center=BANGKOK_CENTER,
         zoom=DEFAULT_ZOOM,
+        thresholds=_thresholds,
+    )
+
+
+@app.route("/api/seasonal")
+def api_seasonal() -> Any:
+    _ensure_loaded()
+    dt_str = request.args.get("dt")
+    try:
+        dt = datetime.fromisoformat(dt_str) if dt_str else datetime.utcnow()
+    except Exception:
+        return (
+            jsonify({"error": "Invalid dt; use ISO format like 2024-12-01T09:00"}),
+            400,
+        )
+
+    dow = dt.weekday()
+    mod = _minute_of_day(dt)
+    sdf = _seasonal_df
+    slice_df = sdf[(sdf["dow"] == dow) & (sdf["minute_of_day"] == mod)][
+        ["h3_cell", "prob"]
+    ]
+    th = _thresholds
+    features = []
+    for row in slice_df.itertuples(index=False):
+        cell = getattr(row, "h3_cell")
+        prob = float(getattr(row, "prob"))
+        color = _prob_to_color(prob, th)
+        if color == "transparent":
+            continue
+        cells_to_draw: List[str] = [cell]
+        if TARGET_H3_RES is not None:
+            res_cur = _get_resolution(cell)
+            if res_cur >= 0 and TARGET_H3_RES > res_cur:
+                cells_to_draw = _children(cell, TARGET_H3_RES)
+        for cdraw in cells_to_draw:
+            polygon = _cell_to_polygon(cdraw)
+            if not polygon:
+                continue
+            feature = {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [polygon]},
+                "properties": {"h3_cell": cdraw, "prob": prob, "color": color},
+            }
+            features.append(feature)
+    return jsonify({"type": "FeatureCollection", "features": features})
+
+
+@app.route("/api/predict_map")
+def api_predict_map() -> Any:
+    _ensure_loaded()
+    dt_str = request.args.get("dt")
+    try:
+        dt = datetime.fromisoformat(dt_str) if dt_str else datetime.utcnow()
+    except Exception:
+        return (
+            jsonify({"error": "Invalid dt; use ISO format like 2024-12-01T09:00"}),
+            400,
+        )
+    preds = _predict_probs_for_dt(dt)
+    th = _thresholds
+    features: List[Dict[str, Any]] = []
+    for row in preds.itertuples(index=False):
+        cell = getattr(row, "h3_cell")
+        prob = float(getattr(row, "prob"))
+        color = _prob_to_color(prob, th)
+        if color == "transparent":
+            continue
+        cells_to_draw: List[str] = [cell]
+        if TARGET_H3_RES is not None:
+            res_cur = _get_resolution(cell)
+            if res_cur >= 0 and TARGET_H3_RES > res_cur:
+                cells_to_draw = _children(cell, TARGET_H3_RES)
+        for cdraw in cells_to_draw:
+            polygon = _cell_to_polygon(cdraw)
+            if not polygon:
+                continue
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [polygon]},
+                    "properties": {"h3_cell": cdraw, "prob": prob, "color": color},
+                }
+            )
+    return jsonify({"type": "FeatureCollection", "features": features})
+
+
+@app.route("/api/predict_point")
+def api_predict_point() -> Any:
+    _ensure_loaded()
+    lat_str = request.args.get("lat")
+    lon_str = request.args.get("lon")
+    dt_str = request.args.get("dt")
+    if lat_str is None or lon_str is None:
+        return jsonify({"error": "lat and lon are required"}), 400
+    try:
+        lat = float(lat_str)
+        lon = float(lon_str)
+    except Exception:
+        return jsonify({"error": "lat/lon must be float"}), 400
+    try:
+        dt = datetime.fromisoformat(dt_str) if dt_str else datetime.utcnow()
+    except Exception:
+        return (
+            jsonify({"error": "Invalid dt; use ISO format like 2024-12-01T09:00"}),
+            400,
+        )
+    try:
+        if hasattr(h3, "geo_to_h3"):
+            cell = h3.geo_to_h3(lat, lon, 7)
+        else:
+            cell = h3.latlng_to_cell(lat, lon, 7)
+    except Exception:
+        return jsonify({"error": "Failed to compute H3 cell"}), 400
+    feats = _build_feature_frame_for_dt(dt, [cell])
+    try:
+        import xgboost as xgb
+    except Exception as e:
+        raise ImportError(
+            "xgboost is required. Install with: pip install xgboost"
+        ) from e
+    dtest = xgb.DMatrix(feats[_feature_names], feature_names=_feature_names)
+    prob = float(_calibrator.predict(_booster.predict(dtest))[0])
+    color = _prob_to_color(prob, _thresholds)
+    return jsonify(
+        {
+            "h3_cell": cell,
+            "prob": prob,
+            "color": color,
+            "dt": dt.isoformat(timespec="minutes"),
+        }
     )
 
 
@@ -204,6 +513,7 @@ def api_route_geojson(route_index: int) -> Any:
     Connects start, end, and all intermediate trip points.
     """
     try:
+        # ***FIX 1: Get the new payload structure***
         data = request.get_json()
         route = data.get("route", {})
         trips = route.get("trips", [])
@@ -225,7 +535,7 @@ def api_route_geojson(route_index: int) -> Any:
         for trip in trips:
             pickup_locations[trip["pickup_zone"]].append(trip["trip_number"])
 
-        # Add route from Start Point to First Pickup
+        # ***FIX 2: Add route from Start Point to First Pickup***
         if trips and start_location:
             start_lat, start_lng = start_location["lat"], start_location["lng"]
             first_pickup_lat, first_pickup_lng = optimizer.h3_to_latlng(
@@ -250,7 +560,7 @@ def api_route_geojson(route_index: int) -> Any:
             pickup_lat, pickup_lng = optimizer.h3_to_latlng(trip["pickup_zone"])
             dropoff_lat, dropoff_lng = optimizer.h3_to_latlng(trip["dropoff_zone"])
 
-            # Add route from previous dropoff to current pickup
+            # ***FIX 3: Add route from previous dropoff to current pickup***
             if i > 0:
                 prev_dropoff_lat, prev_dropoff_lng = optimizer.h3_to_latlng(
                     trips[i - 1]["dropoff_zone"]
@@ -322,7 +632,7 @@ def api_route_geojson(route_index: int) -> Any:
                 }
             )
 
-        # Add route from Last Dropoff to End Point
+        # ***FIX 4: Add route from Last Dropoff to End Point***
         if trips and end_location:
             last_dropoff_lat, last_dropoff_lng = optimizer.h3_to_latlng(
                 trips[-1]["dropoff_zone"]

@@ -1,0 +1,32 @@
+🚖 What This Model Predicts:
+This model predicts the TOTAL DRIVING DISTANCE of a complete taxi trip - not just passenger distance.
+Specifically, it predicts:
+
+The actual route distance a taxi drives from pickup point to drop-off point
+Real road distance (accounting for turns, traffic routing, detours)
+NOT straight-line distance (which would be much shorter)
+
+What it's based on:
+
+Start location (pickup coordinates)
+End location (drop-off coordinates)
+Time factors (hour, day of week, month)
+Trip characteristics (estimated duration, average speed, idle time)
+Geographic zones (H3 hexagonal areas for Bangkok)
+
+Example:
+
+Straight-line distance: Bangna to Suvarnabhumi = 15 km
+Model prediction: 22 km (actual driving route with roads, turns, traffic)
+Real taxi meter reading: ~23 km
+
+Key Point:
+This is the distance that determines:
+
+⛽ Fuel consumption
+💰 Taxi fare (distance-based pricing)
+⏱️ Driving time (combined with speed)
+🛣️ Route planning for your recommendation system
+
+So yes - this predicts the actual passenger trip distance that would appear on the taxi meter, not just geographic distance between two points.
+This is exactly what you need for calculating taxi fares and revenue in your route recommendation system! 🎯
