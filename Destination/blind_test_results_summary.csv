@@ -1,0 +1,2 @@
+test_date,num_files_tested,num_trips,top_1_accuracy,top_3_accuracy,top_5_accuracy,f1_macro,f1_weighted,avg_trip_distance_km,avg_trip_duration_min,avg_fare_thb
+December 2024,10,118193,0.5518770147132233,0.75028131953669,0.823179037675666,0.4085065715837455,0.5221801534681506,18.960363235392457,27.56617213653375,164.409325286455

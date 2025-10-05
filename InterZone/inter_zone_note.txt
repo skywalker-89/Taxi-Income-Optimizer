@@ -1,0 +1,20 @@
+Travel time between H3 zones when empty (no passenger)
+Traffic patterns throughout the day
+This is separate from your trip duration model, which assumes you already have a passenger
+
+
+Your inter-zone travel time model specifically estimates: "How long does it take to travel empty (no passenger) between H3 zones?"
+
+This is used for:
+
+Time between dropping off passenger in Zone X and picking up next passenger in Zone Y
+Time to reach initial pickup location
+Time to return home
+
+* Objective: Build Empty Travel Time Prediction Model
+* You want to predict how long it takes for a taxi to travel empty between H3 zones - this is the time between dropping off a passenger in Zone X and picking up the next passenger in Zone Y. This helps optimize taxi routing and estimate repositioning costs.
+* Approach:
+* Extract Empty Trips: Find sequences where for_hire_light = 1 (empty) moving between different H3 zones
+* Target: Continuous travel time in minutes between origin-destination zone pairs
+* Features: Origin/destination zones, time patterns, traffic conditions, distance/direction
+* Traffic Patterns: Include time of day, day of week, and congestion effects
